@@ -1,583 +1,362 @@
-import { universalStorage } from './storage';
-
-const API_BASE_URL = 'https://us-central1-vendorman-d66fd.cloudfunctions.net/api';
+// src/services/api.js
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const STORAGE_KEYS = {
-  PRODUCTS: 'vendorman_products_data',
-  COMBOS: 'vendorman_combos_data',
-  FRACIONADOS: 'vendorman_fracionados_data',
-  COMANDA: 'vendorman_comandas_data',
-  ESTOQUE: 'vendorman_estoque_data',
-  CONFIG: 'vendorman_config_data',
-  LAST_SYNC: 'vendorman_last_sync'
+  COMANDAS: '@vendorMan:comandas',
+  ITENS: '@vendorMan:itens',
+  SYNC_DATA: '@vendorMan:syncData'
 };
 
-// Função auxiliar para timeout
-const fetchWithTimeout = async (url, options = {}, timeout = 15000) => {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeout);
-  
+// ===== FUNÇÕES BÁSICAS DE STORAGE =====
+export const salvarDados = async (key, data) => {
   try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal
-    });
-    
-    clearTimeout(id);
-    return response;
+    const jsonData = JSON.stringify(data);
+    await AsyncStorage.setItem(key, jsonData);
+    console.log(`💾 Dados salvos em ${key}`);
+    return true;
   } catch (error) {
-    clearTimeout(id);
+    console.error(`❌ Erro ao salvar dados em ${key}:`, error);
     throw error;
   }
 };
 
-export const apiService = {
-  // Sincronizar dados iniciais - ATUALIZADO
-  async syncInitialData() {
-    try {
-      console.log('🔄 Iniciando sincronização...');
-      
-      const response = await fetchWithTimeout(`${API_BASE_URL}/products`);
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      console.log('📦 Dados recebidos do servidor:', {
-        produtos: data.products?.length || 0,
-        combos: data.combos?.length || 0,
-        fracionados: data.fracionados?.length || 0
-      });
-      
-      // Salvar usando storage universal
-      await universalStorage.setItem(STORAGE_KEYS.PRODUCTS, data.products || []);
-      await universalStorage.setItem(STORAGE_KEYS.COMBOS, data.combos || []);
-      await universalStorage.setItem(STORAGE_KEYS.FRACIONADOS, data.fracionados || []);
-      
-      // Salvar timestamp da última sincronização
-      await universalStorage.setItem(STORAGE_KEYS.LAST_SYNC, Date.now());
-      
-      console.log('✅ Dados sincronizados com sucesso');
+export const carregarDados = async (key) => {
+  try {
+    const jsonData = await AsyncStorage.getItem(key);
+    if (jsonData) {
+      const data = JSON.parse(jsonData);
+      console.log(`📂 Dados carregados de ${key}:`, Array.isArray(data) ? `${data.length} itens` : 'objeto');
       return data;
-    } catch (error) {
-      console.log('❌ Erro na sincronização:', error.message);
-      // Retorna dados locais em caso de erro
-      return await this.getLocalData();
     }
-  },
+    console.log(`📂 Nenhum dado encontrado em ${key}`);
+    return null;
+  } catch (error) {
+    console.error(`❌ Erro ao carregar dados de ${key}:`, error);
+    throw error;
+  }
+};
 
-  // Verificar se precisa sincronizar (cache de 5 minutos)
-  async needsSync() {
-    try {
-      const lastSync = await universalStorage.getItem(STORAGE_KEYS.LAST_SYNC, 0);
-      const now = Date.now();
-      const fiveMinutes = 5 * 60 * 1000;
-      
-      return (now - lastSync) > fiveMinutes;
-    } catch (error) {
-      console.log('❌ Erro ao verificar necessidade de sync:', error);
-      return true; // Em caso de erro, força sincronização
-    }
-  },
+// ===== FUNÇÕES DE COMANDAS =====
+export const getComandas = async () => {
+  try {
+    const comandas = await carregarDados(STORAGE_KEYS.COMANDAS);
+    return comandas || [];
+  } catch (error) {
+    console.error('❌ Erro ao carregar comandas:', error);
+    return [];
+  }
+};
 
-  // Buscar dados locais - ATUALIZADO
-  async getLocalData() {
-    try {
-      const [products, combos, fracionados] = await Promise.all([
-        universalStorage.getArray(STORAGE_KEYS.PRODUCTS),
-        universalStorage.getArray(STORAGE_KEYS.COMBOS),
-        universalStorage.getArray(STORAGE_KEYS.FRACIONADOS)
-      ]);
-
-      const data = {
-        products: products,
-        combos: combos,
-        fracionados: fracionados
-      };
-
-      console.log('📊 Dados locais carregados:', {
-        produtos: data.products.length,
-        combos: data.combos.length,
-        fracionados: data.fracionados.length
-      });
-
-      return data;
-    } catch (error) {
-      console.log('❌ Erro ao buscar dados locais:', error);
-      return { products: [], combos: [], fracionados: [] };
-    }
-  },
-
-  // Inicializar dados do servidor
-  async initializeFromServer() {
-    try {
-      console.log('🚀 Inicializando dados do servidor...');
-      
-      const response = await fetchWithTimeout(`${API_BASE_URL}/admin/init-collections`, {
-        method: 'GET'
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      const result = await response.json();
-      console.log('✅ Resposta da inicialização:', result);
-      
-      // Após inicializar no servidor, sincroniza os dados
-      await this.syncInitialData();
-      
-      return result;
-    } catch (error) {
-      console.log('❌ Erro na inicialização do servidor:', error);
-      throw error;
-    }
-  },
-
-  // Buscar todos os itens para venda - ATUALIZADO
-  async getAllItems() {
-    try {
-      const data = await this.getLocalData();
-      
-      const produtosFormatados = data.products.map(p => ({
-        ...p,
-        tipo: 'produto',
-        codItem: p.codInt.toString(),
-        precoVenda: p.preco
-      }));
-
-      const combosFormatados = data.combos.map(c => ({
-        ...c,
-        tipo: 'combo',
-        codItem: c.codCombo,
-        precoVenda: c.precoCombo,
-        descricao: c.descricao
-      }));
-
-      const fracionadosFormatados = data.fracionados.map(f => ({
-        ...f,
-        tipo: 'fracionado',
-        codItem: f.codFracionado,
-        precoVenda: f.preco || 0,
-        descricao: f.descricao
-      }));
-
-      const todosItens = [...produtosFormatados, ...combosFormatados, ...fracionadosFormatados];
-      console.log('🛍️ Itens disponíveis:', todosItens.length);
-      
-      return todosItens;
-    } catch (error) {
-      console.log('❌ Erro ao carregar itens:', error);
-      return [];
-    }
-  },
-
-  // Salvar comanda localmente - ATUALIZADO
-  async saveComandaLocal(comanda) {
-    try {
-      const comandas = await universalStorage.getArray(STORAGE_KEYS.COMANDA);
-      
-      const index = comandas.findIndex(c => c._id === comanda._id);
-      if (index >= 0) {
-        comandas[index] = comanda;
-        console.log('📝 Comanda atualizada:', comanda.numero);
-      } else {
-        comandas.push(comanda);
-        console.log('🆕 Nova comanda criada:', comanda.numero);
-      }
-      
-      await universalStorage.setItem(STORAGE_KEYS.COMANDA, comandas);
-      return true;
-    } catch (error) {
-      console.log('❌ Erro ao salvar comanda local:', error);
-      return false;
-    }
-  },
-
-  // Buscar comanda por ID - ATUALIZADO
-  async getComandaById(comandaId) {
-    try {
-      const comandas = await this.getComandasLocais();
-      const comanda = comandas.find(c => c._id === comandaId) || null;
-      console.log('🔍 Comanda encontrada:', comanda ? comanda.numero : 'não encontrada');
-      return comanda;
-    } catch (error) {
-      console.log('❌ Erro ao buscar comanda:', error);
+export const getComanda = async (comandaId) => {
+  try {
+    console.log(`🔍 Buscando comanda: ${comandaId}`);
+    
+    if (!comandaId) {
+      console.warn('⚠️ ID da comanda não fornecido');
       return null;
     }
-  },
-
-  // Buscar comandas locais - ATUALIZADO
-  async getComandasLocais() {
-    try {
-      const comandas = await universalStorage.getArray(STORAGE_KEYS.COMANDA);
-      console.log('📋 Comandas locais:', comandas.length);
-      return comandas;
-    } catch (error) {
-      console.log('❌ Erro ao buscar comandas locais:', error);
-      return [];
-    }
-  },
-
-async adicionarItemComanda(comandaId, item, pedidoIndex = 0) {
-  try {
-    console.log('➕ Tentando adicionar item:', {
-      comandaId,
-      pedidoIndex,
-      item: item.descricao,
-      quantidade: item.quantidade
-    });
-
-    const comandas = await this.getComandasLocais();
-    const comandaIndex = comandas.findIndex(c => c._id === comandaId);
     
-    if (comandaIndex === -1) {
-      throw new Error('Comanda não encontrada');
+    const comandas = await getComandas();
+    const comandaEncontrada = comandas.find(c => c.id === comandaId);
+    
+    if (!comandaEncontrada) {
+      console.warn(`⚠️ Comanda ${comandaId} não encontrada`);
+      return null;
     }
+    
+    console.log(`✅ Comanda encontrada:`, {
+      id: comandaEncontrada.id,
+      numero: comandaEncontrada.numero,
+      status: comandaEncontrada.status,
+      itens: comandaEncontrada.itens?.length || 0
+    });
+    
+    return comandaEncontrada;
+  } catch (error) {
+    console.error(`❌ Erro ao buscar comanda ${comandaId}:`, error);
+    return null;
+  }
+};
 
-    // Verificar se o pedido existe
-    if (!comandas[comandaIndex].pedidos || !comandas[comandaIndex].pedidos[pedidoIndex]) {
-      throw new Error('Pedido não encontrado');
-    }
+export const salvarComandas = async (comandas) => {
+  try {
+    await salvarDados(STORAGE_KEYS.COMANDAS, comandas);
+    console.log(`✅ ${comandas.length} comandas salvas`);
+    return true;
+  } catch (error) {
+    console.error('❌ Erro ao salvar comandas:', error);
+    throw error;
+  }
+};
 
-    // Calcular preços
-    const precoUnitario = item.precoVenda || item.preco || 0;
-    const precoTotal = precoUnitario * item.quantidade;
-
-    const novoItem = {
-      tipo: item.tipo,
-      codItem: item.codItem,
-      descricao: item.descricao,
-      quantidade: item.quantidade,
-      precoUnitario: precoUnitario,
-      precoTotal: precoTotal
+export const criarComanda = async (numero) => {
+  try {
+    const comandas = await getComandas();
+    const novaComanda = {
+      id: Date.now().toString(),
+      numero: numero.toString(),
+      status: 'aberta',
+      dataAbertura: new Date().toISOString(),
+      itens: [],
+      total: 0
     };
-
-    console.log('📦 Novo item criado:', novoItem);
-
-    // Adicionar item ao pedido específico
-    comandas[comandaIndex].pedidos[pedidoIndex].itens.push(novoItem);
-
-    // Atualizar total da comanda
-    comandas[comandaIndex].total = this.calcularTotalComanda(comandas[comandaIndex]);
-    comandas[comandaIndex].sincronizado = false;
-
-    console.log('💾 Salvando comanda atualizada...');
-    await universalStorage.setItem(STORAGE_KEYS.COMANDA, comandas);
     
-    console.log('✅ Item adicionado com sucesso ao pedido', pedidoIndex);
-    return comandas[comandaIndex];
+    comandas.push(novaComanda);
+    await salvarComandas(comandas);
+    
+    console.log(`✅ Nova comanda criada:`, novaComanda);
+    return novaComanda;
   } catch (error) {
-    console.log('❌ Erro ao adicionar item:', error);
+    console.error('❌ Erro ao criar comanda:', error);
     throw error;
   }
-},
+};
 
-
-  // Calcular total da comanda
-  calcularTotalComanda(comanda) {
-    if (!comanda.pedidos || comanda.pedidos.length === 0) {
-      return 0;
+export const adicionarItemComanda = async (comandaId, itemData) => {
+  try {
+    console.log(`➕ Tentando adicionar item à comanda ${comandaId}:`, itemData);
+    
+    if (!comandaId || !itemData) {
+      throw new Error('Dados insuficientes para adicionar item');
     }
     
-    let total = 0;
-    comanda.pedidos.forEach(pedido => {
-      pedido.itens.forEach(item => {
-        total += item.precoTotal || 0;
-      });
+    const comandas = await getComandas();
+    const comandaIndex = comandas.findIndex(c => c.id === comandaId);
+    
+    if (comandaIndex === -1) {
+      throw new Error(`Comanda ${comandaId} não encontrada`);
+    }
+    
+    const novoItem = {
+      id: Date.now().toString(),
+      ...itemData,
+      dataAdicao: new Date().toISOString()
+    };
+    
+    // Inicializa array de itens se não existir
+    if (!comandas[comandaIndex].itens) {
+      comandas[comandaIndex].itens = [];
+    }
+    
+    comandas[comandaIndex].itens.push(novoItem);
+    
+    // Atualiza total da comanda
+    comandas[comandaIndex].total = comandas[comandaIndex].itens.reduce((total, item) => {
+      return total + (item.preco * item.quantidade);
+    }, 0);
+    
+    await salvarComandas(comandas);
+    console.log(`✅ Item adicionado com sucesso à comanda ${comandaId}`);
+    
+    return comandas[comandaIndex];
+  } catch (error) {
+    console.error(`❌ Erro ao adicionar item à comanda ${comandaId}:`, error);
+    throw error;
+  }
+};
+
+export const fecharComanda = async (comandaId) => {
+  try {
+    console.log(`📦 Iniciando fechamento da comanda: ${comandaId}`);
+    
+    if (!comandaId) {
+      throw new Error('ID da comanda não fornecido');
+    }
+    
+    const comanda = await getComanda(comandaId);
+    if (!comanda) {
+      throw new Error(`Comanda ${comandaId} não encontrada`);
+    }
+    
+    if (comanda.status === 'fechada') {
+      console.warn(`⚠️ Comanda ${comandaId} já está fechada`);
+      return comanda;
+    }
+    
+    const comandas = await getComandas();
+    const comandaIndex = comandas.findIndex(c => c.id === comandaId);
+    
+    if (comandaIndex === -1) {
+      throw new Error(`Comanda ${comandaId} não encontrada para fechamento`);
+    }
+    
+    // Calcula total final
+    const total = comandas[comandaIndex].itens?.reduce((sum, item) => {
+      return sum + (item.preco * item.quantidade);
+    }, 0) || 0;
+    
+    // Atualiza comanda
+    comandas[comandaIndex].status = 'fechada';
+    comandas[comandaIndex].dataFechamento = new Date().toISOString();
+    comandas[comandaIndex].total = total;
+    
+    await salvarComandas(comandas);
+    
+    const comandaFechada = comandas[comandaIndex];
+    console.log(`✅ Comanda fechada com sucesso:`, {
+      id: comandaFechada.id,
+      numero: comandaFechada.numero,
+      total: comandaFechada.total,
+      itens: comandaFechada.itens?.length || 0
     });
     
-    return total;
-  },
+    return comandaFechada;
+  } catch (error) {
+    console.error(`❌ Erro ao fechar comanda ${comandaId}:`, error);
+    throw error;
+  }
+};
 
-async removerItemComanda(comandaId, pedidoIndex, itemIndex) {
+export const reabrirComanda = async (comandaId) => {
   try {
-    const comandas = await this.getComandasLocais();
-    const comandaIndex = comandas.findIndex(c => c._id === comandaId);
+    console.log(`🔄 Reabrindo comanda: ${comandaId}`);
+    
+    const comandas = await getComandas();
+    const comandaIndex = comandas.findIndex(c => c.id === comandaId);
     
     if (comandaIndex === -1) {
-      throw new Error('Comanda não encontrada');
+      throw new Error(`Comanda ${comandaId} não encontrada`);
     }
-
-    // Verificar se o pedido existe
-    if (!comandas[comandaIndex].pedidos || !comandas[comandaIndex].pedidos[pedidoIndex]) {
-      throw new Error('Pedido não encontrado');
-    }
-
-    // Remover item do pedido específico
-    if (comandas[comandaIndex].pedidos[pedidoIndex].itens.length > itemIndex) {
-      const itemRemovido = comandas[comandaIndex].pedidos[pedidoIndex].itens[itemIndex];
-      comandas[comandaIndex].pedidos[pedidoIndex].itens.splice(itemIndex, 1);
-      
-      console.log('➖ Item removido do pedido', pedidoIndex, ':', itemRemovido.descricao);
-      
-      // Atualizar total
-      comandas[comandaIndex].total = this.calcularTotalComanda(comandas[comandaIndex]);
-      comandas[comandaIndex].sincronizado = false;
-
-      await universalStorage.setItem(STORAGE_KEYS.COMANDA, comandas);
-      return comandas[comandaIndex];
-    }
+    
+    comandas[comandaIndex].status = 'aberta';
+    comandas[comandaIndex].dataFechamento = null;
+    
+    await salvarComandas(comandas);
+    console.log(`✅ Comanda reaberta: ${comandaId}`);
     
     return comandas[comandaIndex];
   } catch (error) {
-    console.log('❌ Erro ao remover item:', error);
+    console.error(`❌ Erro ao reabrir comanda ${comandaId}:`, error);
     throw error;
   }
-},
-  // Sincronizar comandas pendentes - ATUALIZADO
-  async syncPendingData() {
-    try {
-      console.log('🔄 Iniciando sincronização de comandas...');
-      
-      const comandas = await this.getComandasLocais();
-      const comandasPendentes = comandas.filter(c => !c.sincronizado && c.status === 'fechada');
-      
-      console.log('📤 Comandas pendentes para sincronizar:', comandasPendentes.length);
-      
-      if (comandasPendentes.length === 0) {
-        return { success: true, message: 'Nada para sincronizar' };
-      }
+};
 
-      const response = await fetchWithTimeout(`${API_BASE_URL}/sync`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          comandas: comandasPendentes
-        })
-      });
-
-      if (response.ok) {
-        const result = await response.json();
-        console.log('✅ Resposta da sincronização:', result);
-        
-        // Marcar comandas como sincronizadas
-        const comandasAtualizadas = comandas.map(c => ({
-          ...c,
-          sincronizado: comandasPendentes.some(v => v._id === c._id) ? true : c.sincronizado
-        }));
-        
-        await universalStorage.setItem(STORAGE_KEYS.COMANDA, comandasAtualizadas);
-        
-        console.log('✅ Sincronização concluída com sucesso');
-        
-        return { 
-          success: true, 
-          message: result.message || 'Sincronização concluída',
-          details: result
-        };
-      } else {
-        const errorText = await response.text();
-        throw new Error(`HTTP ${response.status}: ${errorText}`);
-      }
-    } catch (error) {
-      console.log('❌ Erro na sincronização:', error.message);
-      return { 
-        success: false, 
-        message: error.name === 'AbortError' ? 'Timeout na sincronização' : `Erro: ${error.message}` 
-      };
-    }
-  },
-
-  // Fechar comanda - ATUALIZADO
-  async fecharComanda(comandaId, formaPagamento, usuario) {
-    try {
-      const comandas = await this.getComandasLocais();
-      const comandaIndex = comandas.findIndex(c => c._id === comandaId);
-      
-      if (comandaIndex === -1) {
-        throw new Error('Comanda não encontrada');
-      }
-
-      console.log('🔒 Fechando comanda:', {
-        numero: comandas[comandaIndex].numero,
-        formaPagamento,
-        usuario
-      });
-
-      // Atualizar comanda
-      comandas[comandaIndex].status = 'fechada';
-      comandas[comandaIndex].formaPagamento = formaPagamento;
-      comandas[comandaIndex].dataFechamento = new Date().toISOString();
-      comandas[comandaIndex].sincronizado = false;
-
-      await universalStorage.setItem(STORAGE_KEYS.COMANDA, comandas);
-      
-      console.log('✅ Comanda fechada com sucesso');
-      
-      return comandas[comandaIndex];
-    } catch (error) {
-      console.log('❌ Erro ao fechar comanda:', error);
-      throw error;
-    }
-  },
-
-
-  async excluirPedido(comandaId, pedidoIndex) {
+// ===== FUNÇÕES DE ITENS =====
+export const getItens = async () => {
   try {
-    const comandas = await this.getComandasLocais();
-    const comandaIndex = comandas.findIndex(c => c._id === comandaId);
+    const itens = await carregarDados(STORAGE_KEYS.ITENS);
+    return itens || [];
+  } catch (error) {
+    console.error('❌ Erro ao carregar itens:', error);
+    return [];
+  }
+};
+
+export const salvarItens = async (itens) => {
+  try {
+    await salvarDados(STORAGE_KEYS.ITENS, itens);
+    console.log(`✅ ${itens.length} itens salvos`);
+    return true;
+  } catch (error) {
+    console.error('❌ Erro ao salvar itens:', error);
+    throw error;
+  }
+};
+
+// ===== SINCRONIZAÇÃO =====
+export const sincronizarDados = async () => {
+  try {
+    console.log('🔄 Iniciando sincronização...');
     
-    if (comandaIndex === -1) {
-      throw new Error('Comanda não encontrada');
-    }
-
-    // Verificar se o pedido existe
-    if (!comandas[comandaIndex].pedidos || !comandas[comandaIndex].pedidos[pedidoIndex]) {
-      throw new Error('Pedido não encontrado');
-    }
-
-    // Remover o pedido
-    const pedidoRemovido = comandas[comandaIndex].pedidos.splice(pedidoIndex, 1)[0];
+    const [comandasLocais, itensLocais] = await Promise.all([
+      getComandas(),
+      getItens()
+    ]);
     
-    console.log('🗑️ Pedido excluído:', pedidoRemovido);
-
-    // Reorganizar números dos pedidos restantes
-    comandas[comandaIndex].pedidos.forEach((pedido, index) => {
-      pedido.numero = index + 1;
+    console.log('📊 Dados para sincronização:', {
+      comandas: comandasLocais.length,
+      itens: itensLocais.length
     });
-
-    // Atualizar total
-    comandas[comandaIndex].total = this.calcularTotalComanda(comandas[comandaIndex]);
-    comandas[comandaIndex].sincronizado = false;
-
-    await universalStorage.setItem(STORAGE_KEYS.COMANDA, comandas);
-    return comandas[comandaIndex];
-  } catch (error) {
-    console.log('❌ Erro ao excluir pedido:', error);
-    throw error;
-  }
-},
-
-async reabrirPedido(comandaId, pedidoIndex) {
-  try {
-    const comandas = await this.getComandasLocais();
-    const comandaIndex = comandas.findIndex(c => c._id === comandaId);
     
-    if (comandaIndex === -1) {
-      throw new Error('Comanda não encontrada');
-    }
-
-    if (!comandas[comandaIndex].pedidos || !comandas[comandaIndex].pedidos[pedidoIndex]) {
-      throw new Error('Pedido não encontrado');
-    }
-
-    // Reabrir o pedido
-    comandas[comandaIndex].pedidos[pedidoIndex].status = 'aberto';
-    comandas[comandaIndex].pedidos[pedidoIndex].dataFechamento = null;
-    comandas[comandaIndex].sincronizado = false;
-
-    await universalStorage.setItem(STORAGE_KEYS.COMANDA, comandas);
-    console.log('✅ Pedido reaberto:', pedidoIndex);
-    return comandas[comandaIndex];
-  } catch (error) {
-    console.log('❌ Erro ao reabrir pedido:', error);
-    throw error;
-  }
-},
-
-async fecharPedido(comandaId, pedidoIndex) {
-  try {
-    const comandas = await this.getComandasLocais();
-    const comandaIndex = comandas.findIndex(c => c._id === comandaId);
+    // Simular sincronização com servidor
+    const syncData = {
+      ultimaSincronizacao: new Date().toISOString(),
+      comandas: comandasLocais.length,
+      itens: itensLocais.length
+    };
     
-    if (comandaIndex === -1) {
-      throw new Error('Comanda não encontrada');
-    }
-
-    if (!comandas[comandaIndex].pedidos || !comandas[comandaIndex].pedidos[pedidoIndex]) {
-      throw new Error('Pedido não encontrado');
-    }
-
-    // Fechar o pedido
-    comandas[comandaIndex].pedidos[pedidoIndex].status = 'fechado';
-    comandas[comandaIndex].pedidos[pedidoIndex].dataFechamento = new Date().toISOString();
-    comandas[comandaIndex].sincronizado = false;
-
-    await universalStorage.setItem(STORAGE_KEYS.COMANDA, comandas);
-    console.log('✅ Pedido fechado:', pedidoIndex);
-    return comandas[comandaIndex];
+    await salvarDados(STORAGE_KEYS.SYNC_DATA, syncData);
+    console.log('✅ Sincronização concluída:', syncData);
+    
+    return syncData;
   } catch (error) {
-    console.log('❌ Erro ao fechar pedido:', error);
+    console.error('❌ Erro na sincronização:', error);
     throw error;
   }
-},
+};
 
-  // Verificar status do servidor
-  async checkServerStatus() {
-    try {
-      const response = await fetchWithTimeout(`${API_BASE_URL}/health`, {}, 5000);
-      if (response.ok) {
-        const status = await response.json();
-        console.log('🌐 Status do servidor:', status);
-        return status;
-      } else {
-        throw new Error('Servidor não está respondendo adequadamente');
-      }
-    } catch (error) {
-      console.log('❌ Erro ao verificar status do servidor:', error);
-      throw error;
-    }
-  },
+export const getSyncStatus = async () => {
+  try {
+    return await carregarDados(STORAGE_KEYS.SYNC_DATA);
+  } catch (error) {
+    console.error('❌ Erro ao carregar status de sync:', error);
+    return null;
+  }
+};
 
-  // Métodos de utilidade para debug
-  async debugStorage() {
-    try {
-      const keys = await universalStorage.getAllKeys();
-      const storageInfo = {};
+// ===== INICIALIZAÇÃO =====
+export const inicializarDados = async () => {
+  try {
+    console.log('🚀 Inicializando dados do app...');
+    
+    const comandas = await getComandas();
+    const itens = await getItens();
+    
+    // Se não há itens, criar alguns de exemplo
+    if (itens.length === 0) {
+      const itensExemplo = [
+        { id: '1', nome: 'Café Expresso', preco: 5.00, categoria: 'Bebidas' },
+        { id: '2', nome: 'Pão de Queijo', preco: 8.00, categoria: 'Salgados' },
+        { id: '3', nome: 'Suco Natural', preco: 7.00, categoria: 'Bebidas' },
+        { id: '4', nome: 'Bolo', preco: 6.50, categoria: 'Doces' },
+        { id: '5', nome: 'Sanduíche', preco: 12.00, categoria: 'Salgados' },
+        { id: '6', nome: 'Água Mineral', preco: 3.00, categoria: 'Bebidas' },
+        { id: '7', nome: 'Refrigerante', preco: 5.50, categoria: 'Bebidas' }
+      ];
       
-      for (const key of keys) {
-        if (key.startsWith('vendorman_')) {
-          const value = await universalStorage.getItem(key);
-          storageInfo[key] = {
-            type: Array.isArray(value) ? 'array' : typeof value,
-            length: Array.isArray(value) ? value.length : 'N/A',
-            sample: Array.isArray(value) && value.length > 0 ? value[0] : value
-          };
-        }
-      }
-      
-      console.log('🐛 Debug Storage:', storageInfo);
-      return storageInfo;
-    } catch (error) {
-      console.log('❌ Erro no debug storage:', error);
-      return {};
+      await salvarItens(itensExemplo);
+      console.log(`✅ ${itensExemplo.length} itens de exemplo criados`);
     }
-  },
-calcularTotalComanda(comanda) {
-  if (!comanda.pedidos || comanda.pedidos.length === 0) {
-    return 0;
+    
+    // Se não há comandas, criar uma de exemplo
+    if (comandas.length === 0) {
+      const novaComanda = await criarComanda('001');
+      console.log('✅ Comanda de exemplo criada:', novaComanda.numero);
+    }
+    
+    console.log('🎯 Aplicativo inicializado com sucesso');
+    return {
+      comandas: await getComandas(),
+      itens: await getItens()
+    };
+  } catch (error) {
+    console.error('❌ Erro na inicialização:', error);
+    throw error;
   }
+};
+
+export default {
+  // Storage
+  salvarDados,
+  carregarDados,
   
-  let total = 0;
-  comanda.pedidos.forEach(pedido => {
-    if (pedido.itens) {
-      pedido.itens.forEach(item => {
-        total += item.precoTotal || 0;
-      });
-    }
-  });
+  // Comandas
+  getComandas,
+  getComanda,
+  salvarComandas,
+  criarComanda,
+  adicionarItemComanda,
+  fecharComanda,
+  reabrirComanda,
   
-  return total;
-},
-  // Limpar todos os dados (para desenvolvimento)
-  async clearAllData() {
-    try {
-      const keys = await universalStorage.getAllKeys();
-      const vendorKeys = keys.filter(key => key.startsWith('vendorman_'));
-      
-      for (const key of vendorKeys) {
-        await universalStorage.removeItem(key);
-      }
-      
-      console.log('🗑️ Todos os dados limpos');
-      return true;
-    } catch (error) {
-      console.log('❌ Erro ao limpar dados:', error);
-      return false;
-    }
-  }
+  // Itens
+  getItens,
+  salvarItens,
+  
+  // Sincronização
+  sincronizarDados,
+  getSyncStatus,
+  
+  // Inicialização
+  inicializarDados
 };

@@ -1,241 +1,214 @@
+// src/screens/HomeScreen.js
 import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
-  TouchableOpacity,
   StyleSheet,
-  ScrollView,
+  TouchableOpacity,
+  FlatList,
   Alert,
-  TextInput
+  TextInput,
+  Modal
 } from 'react-native';
-import { apiService } from '../services/api';
+import { getComandas, criarComanda, sincronizarDados, getItens } from '../services/api';
 
 const HomeScreen = ({ navigation }) => {
   const [comandas, setComandas] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [showNovaComanda, setShowNovaComanda] = useState(false);
-  const [novaComandaData, setNovaComandaData] = useState({
-    numero: '',
-    nomeCliente: '',
-    operador: 'Operador'
-  });
+  const [modalVisible, setModalVisible] = useState(false);
+  const [novoNumero, setNovoNumero] = useState('');
 
   useEffect(() => {
-    loadComandas();
+    carregarDados();
   }, []);
 
-  const loadComandas = async () => {
+  const carregarDados = async () => {
     try {
-      const comandasData = await apiService.getComandasLocais();
-      const comandasAbertas = comandasData.filter(c => c.status === 'aberta');
-      setComandas(comandasAbertas);
+      setLoading(true);
+      const [comandasData, itensData] = await Promise.all([
+        getComandas(),
+        getItens()
+      ]);
+      setComandas(comandasData);
+      console.log('📊 Dados carregados:', {
+        comandas: comandasData.length,
+        itens: itensData.length
+      });
     } catch (error) {
-      console.log('Erro ao carregar comandas:', error);
+      console.error('❌ Erro ao carregar dados:', error);
+      Alert.alert('Erro', 'Falha ao carregar dados');
     } finally {
       setLoading(false);
     }
   };
 
-  const generateNumeroComanda = () => {
-    const ultimoNumero = comandas.length > 0 
-      ? Math.max(...comandas.map(c => c.numero))
-      : 0;
-    return ultimoNumero + 1;
-  };
-
-  const handleNovaComanda = () => {
-    const numero = generateNumeroComanda();
-    setNovaComandaData({
-      numero: numero.toString(),
-      nomeCliente: '',
-      operador: 'Operador'
-    });
-    setShowNovaComanda(true);
-  };
-
-  const criarNovaComanda = async () => {
-    if (!novaComandaData.numero || !novaComandaData.operador) {
-      Alert.alert('Erro', 'Número e operador são obrigatórios');
-      return;
-    }
-
+  const handleNovaComanda = async (numero) => {
     try {
-      const novaComanda = {
-        _id: Date.now().toString(), // ID temporário
-        numero: parseInt(novaComandaData.numero),
-        nomeCliente: novaComandaData.nomeCliente || '',
-        operador: novaComandaData.operador,
-        pedidos: [],
-        status: 'aberta',
-        total: 0,
-        dataAbertura: new Date().toISOString(),
-        sincronizado: false
-      };
-
-      // Salvar localmente
-      await apiService.saveComandaLocal(novaComanda);
+      const numeroComanda = numero || (comandas.length + 1).toString().padStart(3, '0');
+      const novaComanda = await criarComanda(numeroComanda);
       
-      // Recarregar lista
-      await loadComandas();
-      
-      // Fechar modal
-      setShowNovaComanda(false);
-      
-      // Navegar para a nova comanda
-      navigation.navigate('ComandaDetail', { comandaId: novaComanda._id });
-      
-      Alert.alert('Sucesso', 'Comanda criada com sucesso!');
+      Alert.alert('Sucesso', `Comanda #${novaComanda.numero} criada!`);
+      carregarDados();
+      setModalVisible(false);
+      setNovoNumero('');
       
     } catch (error) {
-      console.log('Erro ao criar comanda:', error);
-      Alert.alert('Erro', 'Não foi possível criar a comanda');
+      console.error('❌ Erro ao criar comanda:', error);
+      Alert.alert('Erro', 'Falha ao criar comanda');
     }
   };
 
-  const renderComandaItem = (comanda) => (
-    <TouchableOpacity
-      key={comanda._id}
-      style={styles.comandaItem}
-      onPress={() => navigation.navigate('ComandaDetail', { comandaId: comanda._id })}
+  const handleSincronizar = async () => {
+    try {
+      await sincronizarDados();
+      await carregarDados();
+      Alert.alert('Sucesso', 'Dados sincronizados!');
+    } catch (error) {
+      console.error('❌ Erro na sincronização:', error);
+      Alert.alert('Aviso', 'Sincronização falhou, mas você pode continuar offline');
+    }
+  };
+
+  const handleConfiguracao = () => {
+    navigation.navigate('Configuracao');
+  };
+
+  const renderComanda = ({ item }) => (
+    <TouchableOpacity 
+      style={[
+        styles.comandaCard,
+        item.status === 'fechada' && styles.comandaFechada
+      ]}
+      onPress={() => navigation.navigate('FecharComanda', { comandaId: item.id })}
     >
       <View style={styles.comandaHeader}>
-        <Text style={styles.comandaNumero}>#{comanda.numero}</Text>
-        <Text style={styles.comandaStatus}>{comanda.status}</Text>
+        <Text style={styles.comandaNumero}>#{item.numero}</Text>
+        <View style={[
+          styles.statusBadge,
+          item.status === 'fechada' ? styles.statusFechada : styles.statusAberta
+        ]}>
+          <Text style={styles.statusText}>
+            {item.status === 'fechada' ? 'FECHADA' : 'ABERTA'}
+          </Text>
+        </View>
       </View>
       
-      <View style={styles.comandaInfo}>
-        <Text style={styles.clienteNome}>
-          {comanda.nomeCliente || 'Cliente não identificado'}
-        </Text>
-        <Text style={styles.operador}>Operador: {comanda.operador}</Text>
-      </View>
+      <Text style={styles.comandaItens}>
+        📦 Itens: {item.itens?.length || 0}
+      </Text>
+      <Text style={styles.comandaTotal}>
+        💰 Total: R$ {item.total?.toFixed(2) || '0.00'}
+      </Text>
       
-      <View style={styles.comandaFooter}>
-        <Text style={styles.total}>
-          Total: R$ {comanda.total?.toFixed(2) || '0.00'}
+      {item.dataAbertura && (
+        <Text style={styles.comandaData}>
+          🕒 Aberta em: {new Date(item.dataAbertura).toLocaleDateString()}
         </Text>
-        <Text style={styles.itensCount}>
-          {comanda.pedidos?.reduce((acc, pedido) => acc + pedido.itens.length, 0) || 0} itens
-        </Text>
-      </View>
+      )}
     </TouchableOpacity>
   );
-
-  if (loading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <Text>Carregando comandas...</Text>
-      </View>
-    );
-  }
 
   return (
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>Gestão de Comandas</Text>
-        <Text style={styles.subtitle}>
-          {comandas.length} comanda(s) aberta(s)
-        </Text>
+        <Text style={styles.title}>VendorMan</Text>
+        <View style={styles.headerButtons}>
+          <TouchableOpacity style={styles.configButton} onPress={handleConfiguracao}>
+            <Text style={styles.configButtonText}>⚙️</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.syncButton} onPress={handleSincronizar}>
+            <Text style={styles.syncButtonText}>🔄</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.addButton} onPress={() => setModalVisible(true)}>
+            <Text style={styles.addButtonText}>+ Comanda</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
-      {/* Botão Nova Comanda */}
-      <TouchableOpacity
-        style={styles.novaComandaButton}
-        onPress={handleNovaComanda}
-      >
-        <Text style={styles.novaComandaButtonText}>+ Nova Comanda</Text>
-      </TouchableOpacity>
+      {/* Estatísticas */}
+      <View style={styles.statsContainer}>
+        <View style={styles.statItem}>
+          <Text style={styles.statNumber}>{comandas.length}</Text>
+          <Text style={styles.statLabel}>Total</Text>
+        </View>
+        <View style={styles.statItem}>
+          <Text style={styles.statNumber}>
+            {comandas.filter(c => c.status === 'aberta').length}
+          </Text>
+          <Text style={styles.statLabel}>Abertas</Text>
+        </View>
+        <View style={styles.statItem}>
+          <Text style={styles.statNumber}>
+            {comandas.filter(c => c.status === 'fechada').length}
+          </Text>
+          <Text style={styles.statLabel}>Fechadas</Text>
+        </View>
+      </View>
 
       {/* Lista de Comandas */}
-      <ScrollView style={styles.comandasList}>
-        {comandas.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyStateText}>
-              Nenhuma comanda aberta
-            </Text>
-            <Text style={styles.emptyStateSubtext}>
-              Clique em "Nova Comanda" para começar
-            </Text>
-          </View>
-        ) : (
-          comandas.map(renderComandaItem)
-        )}
-      </ScrollView>
+      {loading ? (
+        <View style={styles.loadingContainer}>
+          <Text>Carregando comandas...</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={comandas}
+          renderItem={renderComanda}
+          keyExtractor={item => item.id}
+          contentContainerStyle={styles.listContent}
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <Text style={styles.emptyText}>Nenhuma comanda encontrada</Text>
+              <TouchableOpacity 
+                style={styles.emptyButton} 
+                onPress={() => setModalVisible(true)}
+              >
+                <Text style={styles.emptyButtonText}>Criar Primeira Comanda</Text>
+              </TouchableOpacity>
+            </View>
+          }
+        />
+      )}
 
       {/* Modal Nova Comanda */}
-      {showNovaComanda && (
-        <View style={styles.modalOverlay}>
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={modalVisible}
+        onRequestClose={() => setModalVisible(false)}
+      >
+        <View style={styles.modalContainer}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Nova Comanda</Text>
             
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>Número da Comanda</Text>
-              <TextInput
-                style={styles.input}
-                value={novaComandaData.numero}
-                onChangeText={(text) => setNovaComandaData({...novaComandaData, numero: text})}
-                keyboardType="numeric"
-                placeholder="Número automático"
-                editable={false}
-              />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>Nome do Cliente (Opcional)</Text>
-              <TextInput
-                style={styles.input}
-                value={novaComandaData.nomeCliente}
-                onChangeText={(text) => setNovaComandaData({...novaComandaData, nomeCliente: text})}
-                placeholder="Digite o nome do cliente"
-              />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>Operador *</Text>
-              <TextInput
-                style={styles.input}
-                value={novaComandaData.operador}
-                onChangeText={(text) => setNovaComandaData({...novaComandaData, operador: text})}
-                placeholder="Seu nome"
-              />
-            </View>
-
+            <Text style={styles.modalLabel}>Número da Comanda:</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Ex: 001"
+              value={novoNumero}
+              onChangeText={setNovoNumero}
+              keyboardType="numeric"
+            />
+            
             <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => setShowNovaComanda(false)}
+              <TouchableOpacity 
+                style={[styles.modalButton, styles.cancelButton]} 
+                onPress={() => setModalVisible(false)}
               >
                 <Text style={styles.cancelButtonText}>Cancelar</Text>
               </TouchableOpacity>
               
-              <TouchableOpacity
-                style={[styles.modalButton, styles.confirmButton]}
-                onPress={criarNovaComanda}
+              <TouchableOpacity 
+                style={[styles.modalButton, styles.confirmButton]} 
+                onPress={() => handleNovaComanda(novoNumero)}
               >
-                <Text style={styles.confirmButtonText}>Criar Comanda</Text>
+                <Text style={styles.confirmButtonText}>Criar</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
-      )}
-
-      {/* Menu Inferior */}
-      <View style={styles.bottomMenu}>
-        <TouchableOpacity
-          style={styles.menuItem}
-          onPress={() => navigation.navigate('Sync')}
-        >
-          <Text style={styles.menuText}>🔄 Sincronizar</Text>
-        </TouchableOpacity>
-        
-        <TouchableOpacity
-          style={styles.menuItem}
-          onPress={() => navigation.navigate('Config')}
-        >
-          <Text style={styles.menuText}>⚙️ Configurações</Text>
-        </TouchableOpacity>
-      </View>
+      </Modal>
     </View>
   );
 };
@@ -245,58 +218,99 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f5f5f5',
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
   header: {
-    backgroundColor: '#007AFF',
-    padding: 20,
-    paddingTop: 60,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: '#FFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
   },
   title: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: 'white',
-    marginBottom: 5,
+    color: '#007AFF',
   },
-  subtitle: {
-    fontSize: 16,
-    color: 'white',
-    opacity: 0.8,
+  headerButtons: {
+    flexDirection: 'row',
+    gap: 8,
   },
-  novaComandaButton: {
-    backgroundColor: '#34C759',
-    margin: 16,
+  configButton: {
+    padding: 10,
+    backgroundColor: '#f0f0f0',
+    borderRadius: 8,
+  },
+  configButtonText: {
+    fontSize: 18,
+  },
+  syncButton: {
+    padding: 10,
+    backgroundColor: '#f0f0f0',
+    borderRadius: 8,
+  },
+  syncButtonText: {
+    fontSize: 18,
+  },
+  addButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: '#007AFF',
+    borderRadius: 8,
+  },
+  addButtonText: {
+    color: '#FFF',
+    fontWeight: 'bold',
+  },
+  statsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
     padding: 16,
-    borderRadius: 10,
-    alignItems: 'center',
+    backgroundColor: '#FFF',
+    marginHorizontal: 16,
+    marginTop: 16,
+    borderRadius: 12,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 3,
   },
-  novaComandaButtonText: {
-    color: 'white',
-    fontSize: 18,
+  statItem: {
+    alignItems: 'center',
+  },
+  statNumber: {
+    fontSize: 24,
     fontWeight: 'bold',
+    color: '#007AFF',
   },
-  comandasList: {
+  statLabel: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 4,
+  },
+  loadingContainer: {
     flex: 1,
-    padding: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  comandaItem: {
-    backgroundColor: 'white',
+  listContent: {
     padding: 16,
-    borderRadius: 10,
-    marginBottom: 12,
+    gap: 12,
+  },
+  comandaCard: {
+    backgroundColor: '#FFF',
+    padding: 16,
+    borderRadius: 12,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
-    elevation: 2,
+    elevation: 3,
+  },
+  comandaFechada: {
+    opacity: 0.7,
+    backgroundColor: '#f8f8f8',
   },
   comandaHeader: {
     flexDirection: 'row',
@@ -305,92 +319,89 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   comandaNumero: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#007AFF',
-  },
-  comandaStatus: {
-    fontSize: 14,
-    color: '#34C759',
-    fontWeight: '500',
-  },
-  comandaInfo: {
-    marginBottom: 8,
-  },
-  clienteNome: {
-    fontSize: 16,
-    fontWeight: '500',
-    marginBottom: 4,
-  },
-  operador: {
-    fontSize: 14,
-    color: '#666',
-  },
-  comandaFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
-    paddingTop: 8,
-  },
-  total: {
-    fontSize: 16,
+    fontSize: 20,
     fontWeight: 'bold',
     color: '#333',
   },
-  itensCount: {
+  statusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  statusAberta: {
+    backgroundColor: '#4CAF50',
+  },
+  statusFechada: {
+    backgroundColor: '#F44336',
+  },
+  statusText: {
+    color: '#FFF',
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
+  comandaItens: {
     fontSize: 14,
     color: '#666',
+    marginBottom: 4,
   },
-  emptyState: {
+  comandaTotal: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#007AFF',
+    marginBottom: 4,
+  },
+  comandaData: {
+    fontSize: 12,
+    color: '#999',
+  },
+  emptyContainer: {
     alignItems: 'center',
-    justifyContent: 'center',
     padding: 40,
   },
-  emptyStateText: {
-    fontSize: 18,
-    color: '#666',
-    marginBottom: 8,
-  },
-  emptyStateSubtext: {
-    fontSize: 14,
+  emptyText: {
+    fontSize: 16,
     color: '#999',
+    marginBottom: 16,
     textAlign: 'center',
   },
-  modalOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+  emptyButton: {
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    backgroundColor: '#007AFF',
+    borderRadius: 8,
+  },
+  emptyButtonText: {
+    color: '#FFF',
+    fontWeight: 'bold',
+  },
+  modalContainer: {
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
+    backgroundColor: 'rgba(0,0,0,0.5)',
   },
   modalContent: {
-    backgroundColor: 'white',
+    backgroundColor: '#FFF',
     padding: 24,
     borderRadius: 12,
-    width: '100%',
-    maxWidth: 400,
+    width: '80%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
   },
   modalTitle: {
     fontSize: 20,
     fontWeight: 'bold',
-    marginBottom: 20,
-    textAlign: 'center',
     color: '#333',
-  },
-  inputGroup: {
     marginBottom: 16,
+    textAlign: 'center',
   },
-  label: {
+  modalLabel: {
     fontSize: 16,
-    fontWeight: '500',
+    color: '#666',
     marginBottom: 8,
-    color: '#333',
   },
   input: {
     borderWidth: 1,
@@ -398,51 +409,32 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 12,
     fontSize: 16,
-    backgroundColor: '#f9f9f9',
+    marginBottom: 20,
   },
   modalButtons: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: 20,
+    gap: 12,
   },
   modalButton: {
     flex: 1,
-    padding: 16,
+    padding: 12,
     borderRadius: 8,
     alignItems: 'center',
-    marginHorizontal: 8,
   },
   cancelButton: {
-    backgroundColor: '#f8f9fa',
-    borderWidth: 1,
-    borderColor: '#ddd',
+    backgroundColor: '#f0f0f0',
   },
   confirmButton: {
     backgroundColor: '#007AFF',
   },
   cancelButtonText: {
     color: '#666',
-    fontWeight: '500',
+    fontWeight: 'bold',
   },
   confirmButtonText: {
-    color: 'white',
-    fontWeight: '500',
-  },
-  bottomMenu: {
-    flexDirection: 'row',
-    backgroundColor: 'white',
-    borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
-    padding: 16,
-  },
-  menuItem: {
-    flex: 1,
-    alignItems: 'center',
-    padding: 12,
-  },
-  menuText: {
-    fontSize: 14,
-    color: '#007AFF',
+    color: '#FFF',
+    fontWeight: 'bold',
   },
 });
 

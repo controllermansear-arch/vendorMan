@@ -1,171 +1,115 @@
+// App.js
 import React, { useState, useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { StatusBar, View, Text, ActivityIndicator, Platform } from 'react-native';
-
-// Screens
-import HomeScreen from './src/screens/HomeScreen';
-import ComandasScreen from './src/screens/ComandasScreen';
-import ComandaDetailScreen from './src/screens/ComandaDetailScreen';
-import ProductsScreen from './src/screens/ProductsScreen';
-import AddItemComandaScreen from './src/screens/AddItemComandaScreen';
-import FecharComandaScreen from './src/screens/FecharComandaScreen';
-import ConfigScreen from './src/screens/ConfigScreen';
-import SyncScreen from './src/screens/SyncScreen';
+import { View, Text } from 'react-native';
+import ErrorBoundary from './src/components/ErrorBoundary';
 import InitScreen from './src/screens/InitScreen';
-
-// Services
-import { apiService } from './src/services/api';
+import HomeScreen from './src/screens/HomeScreen';
+import FecharComandaScreen from './src/screens/FecharComandaScreen';
+import EditarItemScreen from './src/screens/EditarItemScreen';
+import ConfigScreen from './src/screens/ConfigScreen';
+import { inicializarDados, sincronizarDados } from './src/services/api';
+import { carregarConfiguracoes } from './src/services/configService';
 
 const Stack = createNativeStackNavigator();
 
 export default function App() {
-  const [isLoading, setIsLoading] = useState(true);
-  const [needsInitialization, setNeedsInitialization] = useState(false);
-  const [storageReady, setStorageReady] = useState(false);
+  const [appInitialized, setAppInitialized] = useState(false);
+  const [initializationError, setInitializationError] = useState(null);
 
   useEffect(() => {
     initializeApp();
   }, []);
 
-  const initializeApp = async () => {
+const initializeApp = async () => {
+  try {
+    console.log('🚀 Inicializando aplicativo...');
+    console.log('📱 Plataforma: web');
+
+    // Pequeno delay para mostrar a tela de loading
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    // Carrega configurações primeiro
+    const config = await carregarConfiguracoes();
+    console.log('⚙️ Configurações carregadas:', config.operador);
+
+    // Inicializar dados do app
+    const appData = await inicializarDados();
+    console.log('📊 Dados locais inicializados:', {
+      comandas: appData.comandas.length,
+      itens: appData.itens.length
+    });
+
+    // Sincronizar dados (se necessário) - não bloqueia se falhar
     try {
-      console.log('🚀 Inicializando aplicativo...');
-      console.log('📱 Plataforma:', Platform.OS);
-      
-      // Verificar se existem dados locais
-      const data = await apiService.getLocalData();
-      const hasData = data.products.length > 0 || data.combos.length > 0 || data.fracionados.length > 0;
-      
-      console.log('📊 Dados locais encontrados:', {
-        produtos: data.products.length,
-        combos: data.combos.length,
-        fracionados: data.fracionados.length,
-        precisaInicializacao: !hasData
-      });
-
-      if (!hasData) {
-        setNeedsInitialization(true);
-      } else {
-        // Se há dados, tentar sincronizar (mas não bloquear se falhar)
-        try {
-          const precisaSync = await apiService.needsSync();
-          if (precisaSync) {
-            console.log('🔄 Precisa sincronizar, iniciando sync...');
-            await apiService.syncInitialData();
-          } else {
-            console.log('✅ Dados atualizados, usando cache');
-          }
-        } catch (syncError) {
-          console.log('⚠️ Sincronização falhou, usando dados locais:', syncError);
-        }
-      }
-
-      setStorageReady(true);
-    } catch (error) {
-      console.log('❌ Erro na inicialização:', error);
-      setNeedsInitialization(true);
-    } finally {
-      setIsLoading(false);
+      const syncResult = await sincronizarDados();
+      console.log('✅ Sincronização concluída:', syncResult);
+    } catch (syncError) {
+      console.warn('⚠️ Sincronização falhou, continuando com dados locais:', syncError);
     }
-  };
 
-  if (isLoading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#007AFF" />
-        <Text style={styles.loadingText}>Inicializando aplicativo...</Text>
-        <Text style={styles.platformText}>
-          Plataforma: {Platform.OS}
-        </Text>
-      </View>
-    );
+    setAppInitialized(true);
+    console.log('🎯 Aplicativo inicializado com sucesso!');
+    
+  } catch (error) {
+    console.error('❌ Erro na inicialização:', error);
+    setInitializationError(error.message);
+    // Mesmo com erro, deixamos o app continuar para não travar
+    setAppInitialized(true);
+  } finally {
+    setIsLoading(false);
+  }
+};
+
+  // Se ainda está inicializando, mostra tela de inicialização
+  if (!appInitialized) {
+    return <InitScreen />;
+  }
+
+  // Se houve erro na inicialização, mostra erro mas permite continuar
+  if (initializationError) {
+    console.warn('⚠️ App iniciando com erros, mas permitindo continuar...');
   }
 
   return (
-    <NavigationContainer>
-      <StatusBar backgroundColor="#007AFF" barStyle="light-content" />
-      <Stack.Navigator
-        initialRouteName={needsInitialization ? "Init" : "Home"}
-        screenOptions={{
-          headerStyle: {
-            backgroundColor: '#007AFF',
-          },
-          headerTintColor: '#fff',
-          headerTitleStyle: {
-            fontWeight: 'bold',
-          },
-        }}
-      >
-        <Stack.Screen 
-          name="Init" 
-          component={InitScreen}
-          options={{ 
-            title: 'Configuração Inicial',
-            headerShown: false
+    <ErrorBoundary>
+      <NavigationContainer>
+        <Stack.Navigator
+          initialRouteName="Home"
+          screenOptions={{
+            headerStyle: {
+              backgroundColor: '#007AFF',
+            },
+            headerTintColor: '#fff',
+            headerTitleStyle: {
+              fontWeight: 'bold',
+            },
           }}
-        />
-        <Stack.Screen 
-          name="Home" 
-          component={HomeScreen}
-          options={{ title: 'Gestão de Comandas' }}
-        />
-        <Stack.Screen 
-          name="Comandas" 
-          component={ComandasScreen}
-          options={{ title: 'Comandas' }}
-        />
-        <Stack.Screen 
-          name="ComandaDetail" 
-          component={ComandaDetailScreen}
-          options={{ title: 'Detalhes da Comanda' }}
-        />
-        <Stack.Screen 
-          name="Products" 
-          component={ProductsScreen}
-          options={{ title: 'Selecionar Produtos' }}
-        />
-        <Stack.Screen 
-          name="AddItemComanda" 
-          component={AddItemComandaScreen}
-          options={{ title: 'Adicionar Item' }}
-        />
-        <Stack.Screen 
-          name="FecharComanda" 
-          component={FecharComandaScreen}
-          options={{ title: 'Fechar Comanda' }}
-        />
-        <Stack.Screen 
-          name="Config" 
-          component={ConfigScreen}
-          options={{ title: 'Configurações' }}
-        />
-        <Stack.Screen 
-          name="Sync" 
-          component={SyncScreen}
-          options={{ title: 'Sincronização' }}
-        />
-      </Stack.Navigator>
-    </NavigationContainer>
+        >
+          <Stack.Screen
+            name="Home"
+            component={HomeScreen}
+            options={{ title: 'VendorMan - Comandas' }}
+          />
+          <Stack.Screen
+            name="FecharComanda"
+            component={FecharComandaScreen}
+            options={{ title: 'Fechar Comanda' }}
+          />
+          <Stack.Screen
+            name="EditarItem"
+            component={EditarItemScreen}
+            options={{ title: 'Produto' }}
+          />
+          <Stack.Screen
+            name="Configuracao"
+            component={ConfigScreen}
+            options={{ title: 'Configurações' }}
+          />
+          {/* Adicione outras screens aqui */}
+        </Stack.Navigator>
+      </NavigationContainer>
+    </ErrorBoundary>
   );
 }
-
-const styles = {
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#f5f5f5',
-    padding: 20,
-  },
-  loadingText: {
-    marginTop: 16,
-    fontSize: 16,
-    color: '#666',
-  },
-  platformText: {
-    marginTop: 8,
-    fontSize: 14,
-    color: '#999',
-  },
-};

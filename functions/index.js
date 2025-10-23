@@ -6,7 +6,8 @@ const mongoose = require('mongoose');
 const app = express();
 app.use(cors({ origin: true }));
 
-const mongoURI = 'X'
+const mongoURI = 'mongodb+srv://felipecazevedo94_db_user:QRsJuVjFMaX3bsON@vendorman.tbuewoz.mongodb.net/?retryWrites=true&w=majority&appName=vendorman';
+
 // Middleware para parsear JSON
 app.use(express.json({ 
   limit: '10mb'
