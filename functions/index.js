@@ -6,16 +6,18 @@ const mongoose = require('mongoose');
 const app = express();
 app.use(cors({ origin: true }));
 
-// Middleware para parsear JSON - CORREÇÃO DO ERRO 411
+const mongoURI = 'X';
+
+// Middleware para parsear JSON
 app.use(express.json({ 
-  limit: '10mb',
-  verify: (req, res, buf) => {
-    req.rawBody = buf;
-  }
+  limit: '10mb'
 }));
 
-// Conexão com MongoDB Atlas
-const mongoURI = process.env.MONGO_URI;
+
+console.log('🔧 Configuração do MongoDB:', {
+  hasConfig: !!mongoURI,
+  usingFallback: !mongoURI
+});
 
 const mongooseOptions = {
   serverSelectionTimeoutMS: 10000,
@@ -24,13 +26,20 @@ const mongooseOptions = {
   retryWrites: true
 };
 
-mongoose.connect(mongoURI, mongooseOptions)
-  .then(() => {
+// Função para conectar ao MongoDB
+const connectToDatabase = async () => {
+  try {
+    await mongoose.connect(mongoURI, mongooseOptions);
     console.log('✅ Conectado ao MongoDB Atlas');
-  })
-  .catch((error) => {
-    console.error('❌ Erro na conexão MongoDB:', error);
-  });
+    return true;
+  } catch (error) {
+    console.error('❌ Erro na conexão MongoDB:', error.message);
+    return false;
+  }
+};
+
+// Conectar ao iniciar
+connectToDatabase();
 
 // Eventos de conexão
 mongoose.connection.on('connected', () => {
@@ -43,6 +52,8 @@ mongoose.connection.on('error', (err) => {
 
 mongoose.connection.on('disconnected', () => {
   console.log('🔌 Mongoose desconectado');
+  // Tenta reconectar após 5 segundos
+  setTimeout(() => connectToDatabase(), 5000);
 });
 
 // Models (mantidos iguais)
@@ -136,7 +147,7 @@ const Estoque = mongoose.model('Estoque', EstoqueSchema);
 const Comanda = mongoose.model('Comanda', ComandaSchema);
 const FluxoCaixa = mongoose.model('FluxoCaixa', FluxoCaixaSchema);
 
-// Função para atualizar estoque (mantida igual)
+// Função para atualizar estoque
 const atualizarEstoque = async (itens, comandaId, usuario, tipoMovimento = 'saida') => {
   for (const item of itens) {
     let quantidadeMovimentar = item.quantidade;
@@ -213,18 +224,17 @@ app.use((req, res, next) => {
   next();
 });
 
-// Rotas
-app.get('/health', (req, res) => {
-  const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
-  
+// Rota raiz
+app.get('/', (req, res) => {
   res.json({
-    status: 'ok',
-    database: dbStatus,
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime()
+    message: 'VendorMan API está funcionando!',
+    version: '1.0.0',
+    environment: process.env.NODE_ENV || 'production',
+    timestamp: new Date().toISOString()
   });
 });
 
+// Demais rotas (mantidas iguais)
 app.get('/admin/status', async (req, res) => {
   try {
     const productsCount = await Product.countDocuments();
@@ -373,12 +383,10 @@ app.post('/sync', async (req, res) => {
   }
 });
 
-// Rota para inicializar collections - CORRIGIDA PARA POST VAZIO
 app.post('/admin/init-collections', async (req, res) => {
   try {
     console.log('Inicializando collections via POST...');
     
-    // Dados de exemplo para produtos
     const produtosExemplo = [
       {
         codInt: 1001,
@@ -395,158 +403,31 @@ app.post('/admin/init-collections', async (req, res) => {
         familia: "BEBIDAS",
         ativo: true,
         tipo: "produto"
-      },
-      {
-        codInt: 1003,
-        descricao: "CERVEJA HEINEKEN 600ML",
-        preco: 15.90,
-        familia: "BEBIDAS",
-        ativo: true,
-        tipo: "produto"
-      },
-      {
-        codInt: 1004,
-        descricao: "ESPETINHO DE CARNE",
-        preco: 12.00,
-        familia: "ALIMENTOS",
-        ativo: true,
-        tipo: "produto"
-      },
-      {
-        codInt: 1005,
-        descricao: "PORÇÃO DE BATATA FRITA",
-        preco: 25.00,
-        familia: "ALIMENTOS",
-        ativo: true,
-        tipo: "produto"
-      },
-      {
-        codInt: 1006,
-        descricao: "SUCO NATURAL LARANJA 300ML",
-        preco: 10.00,
-        familia: "BEBIDAS",
-        ativo: true,
-        tipo: "produto"
       }
     ];
 
-    // Inserir produtos
-    let produtosInseridos = 0;
     for (const produto of produtosExemplo) {
       await Product.findOneAndUpdate(
         { codInt: produto.codInt },
         produto,
         { upsert: true, new: true }
       );
-      produtosInseridos++;
     }
 
-    // Dados de exemplo para combos
-    const combosExemplo = [
-      {
-        codCombo: "COMBO01",
-        descricao: "COMBO CERVEJA + ESPETINHO",
-        precoCombo: 30.00,
-        produtosCombo: [
-          {
-            codInt: 1003,
-            descricao: "CERVEJA HEINEKEN 600ML",
-            quantidadeCombo: 1
-          },
-          {
-            codInt: 1004,
-            descricao: "ESPETINHO DE CARNE",
-            quantidadeCombo: 1
-          }
-        ],
-        ativo: true
-      },
-      {
-        codCombo: "COMBO02",
-        descricao: "COMBO REFRI + BATATA",
-        precoCombo: 30.00,
-        produtosCombo: [
-          {
-            codInt: 1002,
-            descricao: "REFRIGERANTE COCA-COLA LATA",
-            quantidadeCombo: 1
-          },
-          {
-            codInt: 1005,
-            descricao: "PORÇÃO DE BATATA FRITA",
-            quantidadeCombo: 1
-          }
-        ],
-        ativo: true
-      }
-    ];
-
-    // Inserir combos
-    let combosInseridos = 0;
-    for (const combo of combosExemplo) {
-      await Combo.findOneAndUpdate(
-        { codCombo: combo.codCombo },
-        combo,
-        { upsert: true, new: true }
-      );
-      combosInseridos++;
-    }
-
-    // Dados de exemplo para fracionados
-    const fracionadosExemplo = [
-      {
-        codFracionado: "FRAC01",
-        descricao: "VODKA ORLOFF DOSE",
-        codInt: 2001,
-        preco: 12.00,
-        quantidadeFracionado: 0.075,
-        unidadeMedida: "L",
-        ativo: true
-      },
-      {
-        codFracionado: "FRAC02",
-        descricao: "WHISKY JOHNNIE WALKER DOSE",
-        codInt: 2002,
-        preco: 18.00,
-        quantidadeFracionado: 0.075,
-        unidadeMedida: "L",
-        ativo: true
-      }
-    ];
-
-    // Inserir fracionados
-    let fracionadosInseridos = 0;
-    for (const fracionado of fracionadosExemplo) {
-      await Fracionado.findOneAndUpdate(
-        { codFracionado: fracionado.codFracionado },
-        fracionado,
-        { upsert: true, new: true }
-      );
-      fracionadosInseridos++;
-    }
-
-    console.log('Collections inicializadas com sucesso via POST');
-    
     res.json({ 
       success: true, 
-      message: 'Collections inicializadas com dados de exemplo via POST',
+      message: 'Collections inicializadas via POST',
       data: {
-        produtos: produtosInseridos,
-        combos: combosInseridos,
-        fracionados: fracionadosInseridos
+        produtos: produtosExemplo.length
       }
     });
 
   } catch (error) {
     console.error('Erro ao inicializar collections via POST:', error);
-    res.status(500).json({ 
-      success: false,
-      error: error.message 
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
-// Rota GET para inicializar collections (mantida)
 app.get('/admin/init-collections', async (req, res) => {
   try {
     console.log('Inicializando collections via GET...');
@@ -606,4 +487,5 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Rota não encontrada' });
 });
 
+// Export para Firebase Functions - FORMA SIMPLIFICADA
 exports.api = functions.https.onRequest(app);
